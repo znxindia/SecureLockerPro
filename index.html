@@ -385,6 +385,25 @@
             border-radius: 10px;
             font-weight: 700;
         }
+        /* Chat Notification Badge */
+        .user-sidebar .nav-item .chat-notification {
+            margin-left: auto;
+            background: #e74c3c;
+            color: #fff;
+            font-size: 8px;
+            padding: 1px 6px;
+            border-radius: 10px;
+            font-weight: 700;
+            animation: pulse 1.5s ease-in-out infinite;
+            display: none;
+        }
+        .user-sidebar .nav-item .chat-notification.show {
+            display: inline-block;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
 
         .user-main {
             margin-left: 200px;
@@ -711,6 +730,7 @@
             border: 1px solid rgba(243,156,18,0.2);
         }
 
+        /* ✅ FIXED: Chat Message Alignment */
         .chat-messages {
             max-height: 250px;
             overflow-y: auto;
@@ -726,8 +746,15 @@
             border-radius: 6px;
             max-width: 80%;
         }
-        .chat-message.admin { background: #1a3a5a; margin-left: auto; }
-        .chat-message.user { background: #2a2a4a; }
+        /* ✅ FIXED: Admin messages on RIGHT, User messages on LEFT */
+        .chat-message.admin { 
+            background: #1a3a5a; 
+            margin-left: auto;  /* Pushes admin messages to RIGHT */
+        }
+        .chat-message.user { 
+            background: #2a2a4a; 
+            margin-right: auto;  /* Pushes user messages to LEFT */
+        }
         .chat-message .sender {
             font-weight: 600;
             font-size: 11px;
@@ -1049,8 +1076,9 @@
             <div class="nav-item" data-tab="profile" onclick="switchUserTab('profile')">
                 <span class="icon">👤</span> Profile
             </div>
-            <div class="nav-item" onclick="openChat()" style="color:#9b59b6;">
+            <div class="nav-item" onclick="openChat()" style="color:#9b59b6; position:relative;">
                 <span class="icon">💬</span> Chat with Admin
+                <span class="chat-notification" id="chatNotificationBadge">🔴 New</span>
             </div>
         </div>
 
@@ -1222,6 +1250,13 @@
         let pdfScale = 1.0;
         let chatListener = null;
         let chatEnabledListener = null;
+        let chatNotificationListener = null;
+        let chatNotificationCount = 0;
+        let lastReadTimestamp = 0;
+
+        // ✅ FIXED: Added from 3.html for chat close fix
+        let isChatOpen = false;
+        let userManuallyClosedChat = false;
 
         // ============================================
         // DOM REFS
@@ -1350,7 +1385,7 @@
         }
 
         // ============================================
-        // USER LOGIN - FIXED: Added LOGIN log
+        // USER LOGIN
         // ============================================
         async function userLogin() {
             const email = document.getElementById('loginEmail').value.trim();
@@ -1373,7 +1408,6 @@
                 const userCredential = await auth.signInWithEmailAndPassword(email, password);
                 const user = userCredential.user;
                 
-                // ✅ FIXED: Create LOGIN log after successful login
                 try {
                     await database.ref(`userLogs/${user.uid}`).push({
                         userId: user.uid,
@@ -1459,6 +1493,12 @@
             document.getElementById('loginBtn').innerHTML = '🔓 Login';
             document.getElementById('registerBtn').disabled = false;
             document.getElementById('registerBtn').innerHTML = '📝 Register';
+            if (chatNotificationListener) {
+                chatNotificationListener();
+                chatNotificationListener = null;
+            }
+            isChatOpen = false;
+            userManuallyClosedChat = false;
         }
 
         function showPendingScreen(userData) {
@@ -1486,7 +1526,6 @@
             document.getElementById('userDashEmail').textContent = userData.email || '';
             document.getElementById('userDashAvatar').textContent = (userData.name || 'U')[0].toUpperCase();
 
-            // Update access status on dashboard
             const accessEnabled = userData.accessEnabled !== false;
             const accessEl = document.getElementById('dashAccessStatus');
             if (accessEl) {
@@ -1502,10 +1541,72 @@
             renderUserLogs();
             renderUserProfile(userData);
             setupAccessListener();
+            setupChatNotificationListener();
+            isChatOpen = false;
+            userManuallyClosedChat = false;
         }
 
         // ============================================
-        // ACCESS LISTENER - Real-time access updates
+        // CHAT NOTIFICATION LISTENER
+        // ============================================
+        function setupChatNotificationListener() {
+            if (!currentUser) return;
+            
+            if (chatNotificationListener) {
+                const userId = currentUser.uid;
+                database.ref(`chats/${userId}/messages`).off('value', chatNotificationListener);
+                chatNotificationListener = null;
+            }
+
+            const userId = currentUser.uid;
+            lastReadTimestamp = parseInt(localStorage.getItem(`chat_last_read_${userId}`)) || Date.now();
+
+            chatNotificationListener = database.ref(`chats/${userId}/messages`).on('value', (snapshot) => {
+                if (isChatOpen) return;
+                if (!snapshot.exists()) {
+                    hideChatNotification();
+                    return;
+                }
+
+                const messages = Object.entries(snapshot.val()).map(([id, data]) => ({ id, ...data }));
+                const unreadCount = messages.filter(msg => 
+                    msg.from === 'admin' && 
+                    msg.timestamp > lastReadTimestamp
+                ).length;
+
+                if (unreadCount > 0 && !isChatOpen) {
+                    showChatNotification(unreadCount);
+                } else {
+                    hideChatNotification();
+                }
+            });
+        }
+
+        function showChatNotification(count) {
+            const badge = document.getElementById('chatNotificationBadge');
+            if (badge) {
+                badge.textContent = `🔴 ${count} New`;
+                badge.classList.add('show');
+            }
+        }
+
+        function hideChatNotification() {
+            const badge = document.getElementById('chatNotificationBadge');
+            if (badge) {
+                badge.classList.remove('show');
+            }
+        }
+
+        function markChatAsRead() {
+            if (!currentUser) return;
+            const userId = currentUser.uid;
+            lastReadTimestamp = Date.now();
+            localStorage.setItem(`chat_last_read_${userId}`, lastReadTimestamp.toString());
+            hideChatNotification();
+        }
+
+        // ============================================
+        // ACCESS LISTENER
         // ============================================
         function setupAccessListener() {
             if (!currentUser) return;
@@ -1513,19 +1614,16 @@
             
             database.ref(`users/${userId}/accessEnabled`).on('value', (snapshot) => {
                 const accessEnabled = snapshot.val() !== false;
-                // Update dashboard
                 const accessEl = document.getElementById('dashAccessStatus');
                 if (accessEl) {
                     accessEl.textContent = accessEnabled ? '🟢 Enabled' : '🔴 Disabled';
                     accessEl.style.color = accessEnabled ? '#2ecc71' : '#e74c3c';
                 }
-                // Update profile
                 const profileAccess = document.getElementById('profileAccess');
                 if (profileAccess) {
                     profileAccess.textContent = accessEnabled ? '🟢 Enabled' : '🔴 Disabled';
                     profileAccess.style.color = accessEnabled ? '#2ecc71' : '#e74c3c';
                 }
-                // Update evidence table
                 renderUserEvidence();
                 showToast(accessEnabled ? 'info' : 'warning', 
                     accessEnabled ? '🟢 Access enabled by admin' : '🔴 Access disabled by admin');
@@ -1609,7 +1707,7 @@
         }
 
         // ============================================
-        // RENDER USER EVIDENCE - WITH ACCESS CHECK
+        // RENDER USER EVIDENCE
         // ============================================
         function renderUserEvidence() {
             const tbody = document.getElementById('evidenceTableBody');
@@ -1624,7 +1722,6 @@
             tbody.innerHTML = allEvidence.map(ev => {
                 const caseData = allCases.find(c => c.id === ev.caseId);
                 
-                // Check if user has approved request for this evidence
                 const hasApprovedRequest = allRequests.some(r => 
                     r.evidenceId === ev.id && r.status === 'approved' && r.userId === currentUser?.uid
                 );
@@ -1632,7 +1729,6 @@
                     r.evidenceId === ev.id && r.status === 'pending' && r.userId === currentUser?.uid
                 );
 
-                // Access status: user must have accessEnabled AND approved request
                 const canPreview = userAccessEnabled && hasApprovedRequest;
 
                 let previewButton = '';
@@ -1665,7 +1761,7 @@
         }
 
         // ============================================
-        // RENDER USER REQUESTS - WITH ACCESS STATUS
+        // RENDER USER REQUESTS
         // ============================================
         function renderUserRequests() {
             const tbody = document.getElementById('requestsTableBody');
@@ -1700,7 +1796,7 @@
         }
 
         // ============================================
-        // RENDER USER LOGS - FIXED: Better display
+        // RENDER USER LOGS
         // ============================================
         function renderUserLogs() {
             const tbody = document.getElementById('logsTableBody');
@@ -1806,7 +1902,7 @@
         }
 
         // ============================================
-        // USER PREVIEW EVIDENCE - WITH ACCESS CHECK
+        // USER PREVIEW EVIDENCE
         // ============================================
         function getPDFJS() {
             if (typeof pdfjsLib !== 'undefined') return pdfjsLib;
@@ -1828,14 +1924,12 @@
                 return;
             }
 
-            // Check if user has access enabled
             const userAccessEnabled = currentUserData?.accessEnabled !== false;
             if (!userAccessEnabled) {
                 showToast('warning', '⚠️ Your access is disabled by admin. Please contact administrator.');
                 return;
             }
 
-            // Check if user has approved request
             const hasApprovedRequest = allRequests.some(r => 
                 r.evidenceId === evidenceId && r.status === 'approved' && r.userId === currentUser?.uid
             );
@@ -2146,7 +2240,6 @@
                 return;
             }
 
-            // Check if already requested
             const existingRequest = allRequests.find(r => r.evidenceId === evidenceId && r.userId === currentUser?.uid);
             if (existingRequest) {
                 showToast('warning', `You already have a ${existingRequest.status} request for this evidence.`);
@@ -2230,7 +2323,7 @@
         }
 
         // ============================================
-        // CHAT WITH ADMIN - FIXED
+        // CHAT WITH ADMIN - FIXED with 3.html close fix
         // ============================================
         function openChat() {
             if (!currentUser) {
@@ -2238,9 +2331,11 @@
                 return;
             }
 
+            userManuallyClosedChat = false;
+            markChatAsRead();
+
             const userId = currentUser.uid;
 
-            // Remove any existing listeners
             if (chatListener) {
                 chatListener();
                 chatListener = null;
@@ -2275,15 +2370,19 @@
                     </div>
                 `;
 
-                document.getElementById('modalContent').className = 'modal';
-                document.getElementById('modalContent').innerHTML = html;
+                const modalContent = document.getElementById('modalContent');
+                modalContent.className = 'modal';
+                modalContent.innerHTML = html;
                 document.getElementById('modalOverlay').classList.add('show');
+                isChatOpen = true;
 
                 loadUserChatMessages(userId);
 
-                // Listen for new messages
                 const chatRef = database.ref(`chats/${userId}/messages`);
                 chatListener = chatRef.on('value', (snapshot) => {
+                    if (!isChatOpen) return;
+                    const container = document.getElementById('userChatMessages');
+                    if (!container) return;
                     if (snapshot.exists()) {
                         const messages = Object.entries(snapshot.val()).map(([id, data]) => ({ id, ...data }));
                         messages.sort((a, b) => a.timestamp - b.timestamp);
@@ -2293,8 +2392,8 @@
                     }
                 });
 
-                // Listen for chat enabled changes
                 chatEnabledListener = database.ref(`chats/${userId}/chatEnabled`).on('value', (snapshot) => {
+                    if (!isChatOpen) return;
                     const enabled = snapshot.val() || false;
                     const input = document.getElementById('userChatInput');
                     const sendBtn = input?.parentElement?.querySelector('button');
@@ -2310,23 +2409,38 @@
             });
         }
 
+        // ✅ FIXED: Close chat with proper listener cleanup (from 3.html)
         function closeChat() {
-            // Remove listeners
             if (chatListener) {
-                chatListener();
+                const userId = currentUser?.uid;
+                if (userId) {
+                    database.ref(`chats/${userId}/messages`).off('value', chatListener);
+                }
                 chatListener = null;
             }
             if (chatEnabledListener) {
-                chatEnabledListener();
+                const userId = currentUser?.uid;
+                if (userId) {
+                    database.ref(`chats/${userId}/chatEnabled`).off('value', chatEnabledListener);
+                }
                 chatEnabledListener = null;
             }
-            // Remove any active listeners on chatEnabled
-            const userId = currentUser?.uid;
-            if (userId) {
-                database.ref(`chats/${userId}/chatEnabled`).off();
-                database.ref(`chats/${userId}/messages`).off();
+            if (chatNotificationListener) {
+                const userId = currentUser?.uid;
+                if (userId) {
+                    database.ref(`chats/${userId}/messages`).off('value', chatNotificationListener);
+                }
+                chatNotificationListener = null;
             }
-            closeModal();
+            
+            isChatOpen = false;
+            userManuallyClosedChat = true;
+            
+            const overlay = document.getElementById('modalOverlay');
+            const modalContent = document.getElementById('modalContent');
+            overlay.classList.remove('show');
+            modalContent.className = 'modal';
+            modalContent.innerHTML = '';
         }
 
         function renderUserChatMessages(messages) {
@@ -2338,6 +2452,7 @@
                 return;
             }
 
+            // ✅ FIXED: Using the corrected CSS classes - Admin on RIGHT, User on LEFT
             container.innerHTML = messages.map(msg => `
                 <div class="chat-message ${msg.from === 'admin' ? 'admin' : 'user'}">
                     <span class="sender ${msg.from === 'admin' ? 'admin' : 'user'}">
@@ -2433,15 +2548,20 @@
 
             try {
                 if (currentUser) {
-                    await database.ref(`userLogs/${currentUser.uid}`).push({
-                        userId: currentUser.uid,
-                        userName: currentUserData?.name || 'User',
-                        action: 'LOGOUT',
-                        details: 'User logged out',
-                        timestamp: new Date().toISOString()
-                    });
+                    try {
+                        await database.ref(`userLogs/${currentUser.uid}`).push({
+                            userId: currentUser.uid,
+                            userName: currentUserData?.name || 'User',
+                            action: 'LOGOUT',
+                            details: 'User logged out',
+                            timestamp: new Date().toISOString()
+                        });
+                        console.log('✅ Logout log saved');
+                    } catch (logError) {
+                        console.warn('⚠️ Could not save logout log, proceeding with logout:', logError.message);
+                    }
                 }
-                // Clean up listeners
+                
                 if (chatListener) {
                     chatListener();
                     chatListener = null;
@@ -2450,14 +2570,28 @@
                     chatEnabledListener();
                     chatEnabledListener = null;
                 }
-                // Remove access listener
+                if (chatNotificationListener) {
+                    chatNotificationListener();
+                    chatNotificationListener = null;
+                }
                 if (currentUser) {
                     database.ref(`users/${currentUser.uid}/accessEnabled`).off();
                 }
+                
+                isChatOpen = false;
+                userManuallyClosedChat = false;
+                
                 await auth.signOut();
                 showToast('info', 'Logged out successfully');
+                
             } catch (error) {
-                showToast('error', 'Logout failed: ' + error.message);
+                console.error('Logout error:', error);
+                try {
+                    await auth.signOut();
+                    showToast('info', 'Logged out successfully');
+                } catch (signOutError) {
+                    showToast('error', 'Logout failed: ' + signOutError.message);
+                }
             }
         }
 
@@ -2465,12 +2599,25 @@
         // MODAL
         // ============================================
         function closeModal() {
-            document.getElementById('modalOverlay').classList.remove('show');
-            document.getElementById('modalContent').className = 'modal';
+            const overlay = document.getElementById('modalOverlay');
+            const modalContent = document.getElementById('modalContent');
+            if (isChatOpen) {
+                closeChat();
+                return;
+            }
+            overlay.classList.remove('show');
+            modalContent.className = 'modal';
+            modalContent.innerHTML = '';
         }
 
         document.getElementById('modalOverlay').addEventListener('click', function(e) {
-            if (e.target === this) closeModal();
+            if (e.target === this) {
+                if (isChatOpen) {
+                    closeChat();
+                } else {
+                    closeModal();
+                }
+            }
         });
 
         // ============================================
@@ -2492,9 +2639,7 @@
         // ============================================
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
-                // Check if chat is open
-                const modalHeader = document.querySelector('.modal-header h2');
-                if (modalHeader && modalHeader.textContent === '💬 Chat with Admin') {
+                if (isChatOpen) {
                     closeChat();
                 } else {
                     closeModal();
@@ -2520,6 +2665,10 @@
         console.log('📎 Evidence Preview: Request + Access Required');
         console.log('🔘 Access Toggle: Real-time sync with admin');
         console.log('✅ User Panel: Fully fixed - Login/Logout logs working');
+        console.log('💬 Chat Notifications: ✅ Added');
+        console.log('🔔 Chat Button: ✅ Fixed - Opens properly every time');
+        console.log('✅ Chat Close: Fixed - Detaches all listeners (from 3.html)');
+        console.log('✅ Chat UI: Fixed - Admin on RIGHT, User on LEFT');
     </script>
 
 </body>
