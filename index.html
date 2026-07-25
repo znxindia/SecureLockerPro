@@ -1350,7 +1350,7 @@
         }
 
         // ============================================
-        // USER LOGIN
+        // USER LOGIN - FIXED: Added LOGIN log
         // ============================================
         async function userLogin() {
             const email = document.getElementById('loginEmail').value.trim();
@@ -1371,6 +1371,22 @@
 
             try {
                 const userCredential = await auth.signInWithEmailAndPassword(email, password);
+                const user = userCredential.user;
+                
+                // ✅ FIXED: Create LOGIN log after successful login
+                try {
+                    await database.ref(`userLogs/${user.uid}`).push({
+                        userId: user.uid,
+                        userName: user.displayName || email || 'User',
+                        action: 'LOGIN',
+                        details: 'User logged in successfully',
+                        timestamp: new Date().toISOString()
+                    });
+                    console.log('✅ Login log created');
+                } catch (logError) {
+                    console.warn('⚠️ Could not create login log:', logError.message);
+                }
+
             } catch (error) {
                 console.error('Login error:', error);
                 let msg = 'Login failed. Please try again.';
@@ -1684,7 +1700,7 @@
         }
 
         // ============================================
-        // RENDER USER LOGS
+        // RENDER USER LOGS - FIXED: Better display
         // ============================================
         function renderUserLogs() {
             const tbody = document.getElementById('logsTableBody');
@@ -1697,22 +1713,37 @@
             const sorted = [...allUserLogs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
             const recent = sorted.slice(0, 20);
 
-            tbody.innerHTML = recent.map(log => `
+            tbody.innerHTML = recent.map(log => {
+                const action = log.action || 'Unknown';
+                let badgeClass = 'locked';
+                const actionLower = action.toLowerCase();
+                
+                if (actionLower === 'login' || actionLower === 'registered') {
+                    badgeClass = 'approved';
+                } else if (actionLower === 'logout') {
+                    badgeClass = 'pending';
+                } else if (actionLower === 'request_sent') {
+                    badgeClass = 'pending';
+                }
+                
+                return `
                 <tr>
-                    <td><span class="status-badge ${log.action === 'login' ? 'approved' : log.action === 'logout' ? 'pending' : 'locked'}">${log.action}</span></td>
+                    <td><span class="status-badge ${badgeClass}">${action}</span></td>
                     <td>${log.details || ''}</td>
                     <td style="font-size:11px;color:#8888bb;">${new Date(log.timestamp).toLocaleString()}</td>
                 </tr>
-            `).join('');
+            `}).join('');
 
             const recentActivity = document.getElementById('userRecentActivity');
             if (sorted.length > 0) {
-                recentActivity.innerHTML = sorted.slice(0, 5).map(log => `
+                recentActivity.innerHTML = sorted.slice(0, 5).map(log => {
+                    const action = log.action || 'Unknown';
+                    return `
                     <div style="padding:4px 0;border-bottom:1px solid #1a1a3e;display:flex;justify-content:space-between;flex-wrap:wrap;">
-                        <span>${log.action} - ${log.details || ''}</span>
+                        <span><span style="color:#3498db;font-weight:600;">${action}</span> - ${log.details || ''}</span>
                         <span style="color:#555577;font-size:10px;">${new Date(log.timestamp).toLocaleString()}</span>
                     </div>
-                `).join('');
+                `}).join('');
             } else {
                 recentActivity.innerHTML = 'No recent activity.';
             }
@@ -2488,6 +2519,7 @@
         console.log('🏛️ Government of India & Kerala Police');
         console.log('📎 Evidence Preview: Request + Access Required');
         console.log('🔘 Access Toggle: Real-time sync with admin');
+        console.log('✅ User Panel: Fully fixed - Login/Logout logs working');
     </script>
 
 </body>
